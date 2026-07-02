@@ -1,5 +1,4 @@
 import os
-from pipeline.detector import detect
 
 try:
     from src.utils.config import WINDOW_TITLE
@@ -48,10 +47,14 @@ def main() -> None:
 
 
     # TESTING detector
-    frame = cv.imread('/Users/phonemaung/au/2026-1/csx3010/vids/ss/ss1.png')
-    test_result = detect(frame)
-    print(test_result["crosshair_x"], test_result["crosshair_y"])
-    print(test_result["enemy_positions"])  # [] if nothing red found     
+    # frame = cv.imread('/Users/phonemaung/au/2026-1/csx3010/vids/ss/ss8.png')
+    # if frame is None:
+    #     print("ERROR: could not load image. Check the path.")
+    #     return
+    # test_result = detect(frame, frame_number=0, timestamp_ms=0.0, method="color", highlight_color="red")
+    # print("Crosshair:", test_result["crosshair_x"], test_result["crosshair_y"])
+    # print("Enemies found:", len(test_result["enemy_positions"]))
+    # print(test_result["enemy_positions"])
 
 if __name__ == "__main__":
     main()

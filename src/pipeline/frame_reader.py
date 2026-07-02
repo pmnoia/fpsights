@@ -34,7 +34,7 @@ def read_frames(input_path, frame_skip=3, max_frames=None):
         if frame_num % frame_skip == 0:
             if fps > 0:
                 #timestamp_sec = frame_index / fps
-                timestamp_ms = (frame_num % fps) * 1000
+                timestamp_ms = (frame_num / fps) * 1000
             else:
                 timestamp_ms = 0.0
             yield frame, frame_num, round(timestamp_ms, 2)

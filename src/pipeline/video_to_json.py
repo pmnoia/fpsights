@@ -3,6 +3,7 @@ import cv2 as cv
 import json
 import os
 import sys
+from detector import detect
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -143,13 +144,33 @@ def rescale_frame(frame, scale=0.75):
     return cv.resize(frame, dimensions, interpolation=cv.INTER_AREA)
 
 def main():
-    args = parse_args()
-    process_video(
-        input_path=args.input,
-        output_json=args.output,
-        frame_skip=args.frame_skip,
-        max_frames=args.max_frames
-    )
+    # args = parse_args()
+    # process_video(
+    #     input_path=args.input,
+    #     output_json=args.output,
+    #     frame_skip=args.frame_skip,
+    #     max_frames=args.max_frames
+    # )
+
+    # TESTING detector
+    for i in range(1, 27):
+        print(i)
+
+        frame = cv.imread(f"/Users/phonemaung/au/2026-1/csx3010/vids/ss/ss{i}.png")
+
+        test_result = detect(
+            frame,
+            frame_number=0,
+            timestamp_ms=0.0,
+            method="color",
+            highlight_color="purple"
+        )
+
+        print("===================================================")
+        print(f" Screenshot: {i}")
+        print("Enemies found:", len(test_result["enemy_positions"]))
+        print(test_result["enemy_positions"])
+        print("===================================================")
 
 if __name__ == "__main__":
     main()

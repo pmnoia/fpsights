@@ -13,11 +13,11 @@ HIGHLIGHT_COLORS = {
     ],
 
     "purple": [
-        (np.array([130, 80, 80]), np.array([165, 255, 255]))
+        (np.array([130, 80, 80]), np.array([165, 255, 255])) # lo hi 1: [130,60,60] [155,255,255] lo hi 2: [140, 110, 135] [155, 255, 255]
     ]
 }
 
-def detect(frame, frame_number=0, timestamp_ms=0.0, prev_frame=None, method="motion", highlight_color="purple"):
+def detect(frame, frame_number=0, timestamp_ms=0.0, prev_frame=None, method="color", highlight_color="purple"):
     # Run detection on one frame and return a dict
     # method="motion" needs prev_frame; method="color" uses highlight_color
     height, width = frame.shape[:2]
@@ -40,16 +40,17 @@ def detect(frame, frame_number=0, timestamp_ms=0.0, prev_frame=None, method="mot
     }
 
 def motion(frame, prev_frame, min_area=2_000, max_area=80_000):
-    # Frame-diff: find anything that moves between two frames
-    curr = cv.GaussianBlur(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), (7, 7), 0)
-    prev = cv.GaussianBlur(cv.cvtColor(prev_frame, cv.COLOR_BGR2GRAY), (7, 7), 0)
+#     # Frame-diff: find anything that moves between two frames
+#     curr = cv.GaussianBlur(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), (7, 7), 0)
+#     prev = cv.GaussianBlur(cv.cvtColor(prev_frame, cv.COLOR_BGR2GRAY), (7, 7), 0)
 
-    diff = cv.absdiff(curr, prev)
-    _, threshold = cv.threshold(diff, 25, 255, cv.THRESH_BINARY)
-    threshold = cv.dilate(threshold, np.ones((7,7), np.uint8), iterations=2)
+#     diff = cv.absdiff(curr, prev)
+#     _, threshold = cv.threshold(diff, 25, 255, cv.THRESH_BINARY)
+#     threshold = cv.dilate(threshold, np.ones((7,7), np.uint8), iterations=2)
 
-    contours, _ = cv.findContours(threshold, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-    return boxes(contours, min_area, max_area, min_aspect=1.0)
+#     contours, _ = cv.findContours(threshold, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+#     return boxes(contours, min_area, max_area, min_aspect=1.0)
+    return []
 
 def color(frame, highlight_color, min_box_area=800, max_box_area=60_000):
     hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
@@ -87,7 +88,7 @@ def color(frame, highlight_color, min_box_area=800, max_box_area=60_000):
     enemy_boxes = color_boxes(contours, mask, min_box_area, max_box_area)
 
     # Keep best candidates only
-    enemy_boxes = sorted(enemy_boxes, key=lambda b: b["confidence"], reverse=True)
+    #enemy_boxes = sorted(enemy_boxes, key=lambda b: b["confidence"], reverse=True)
 
     return enemy_boxes[:5]
 
@@ -135,21 +136,43 @@ def color_boxes(contours, mask, min_box_area, max_box_area):
 
     return enemy_boxes
 
-def boxes(contours, min_area, max_area, min_aspect):
-    boxes = []
-    for c in contours:
-        area = cv.contourArea(c)
-        if not (min_area <= area <= max_area):
-            continue
-        x,y,w,h = cv.boundingRect(c)
-        if h / max(w, 1) < min_aspect:
-            continue
-        conf = min(area / 40_000, 1.0)
-        boxes.append({"x": x, "y": y, "w": w, "h": h, "confidence": round(conf, 3)})
-    return boxes
+# def boxes(contours, min_area, max_area, min_aspect):
+#     boxes = []
+#     for c in contours:
+#         area = cv.contourArea(c)
+#         if not (min_area <= area <= max_area):
+#             continue
+#         x,y,w,h = cv.boundingRect(c)
+#         if h / max(w, 1) < min_aspect:
+#             continue
+#         conf = min(area / 40_000, 1.0)
+#         boxes.append({"x": x, "y": y, "w": w, "h": h, "confidence": round(conf, 3)})
+#     return boxes
 
 def get_crosshair(width, height):
     return width // 2, height // 2
+
+def save_debug_frame(frame, result, debug_dir, processed_index, limit=200):
+    """Save annotated preview image. Only runs for the first `limit` frames."""
+    if processed_index >= limit:
+        return
+    os.makedirs(debug_dir, exist_ok=True)
+    vis = frame.copy()
+
+    cv.drawMarker(vis, (result["crosshair_x"], result["crosshair_y"]),
+                  (0, 255, 0), cv.MARKER_CROSS, markerSize=20, thickness=2)
+
+    for b in result["enemy_positions"]:
+        cv.rectangle(vis, (b["x"], b["y"]), (b["x"]+b["w"], b["y"]+b["h"]), (0, 0, 255), 2)
+        cv.putText(vis, f"{b['confidence']:.2f}", (b["x"], b["y"]-6),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+    cv.putText(vis,
+               f"frame={result['frame_number']}  t={result['timestamp_ms']:.0f}ms  "
+               f"enemies={len(result['enemy_positions'])}",
+               (10, 24), cv.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1)
+
+    cv.imwrite(os.path.join(debug_dir, f"debug_{result['frame_number']:06d}.jpg"), vis)
 
 # def detect_enemies(frame):
 #     # use HSV instead of RGB
@@ -183,26 +206,3 @@ def get_crosshair(width, height):
 #             "confidence": 0.5, # replace this hard coded value
 #         })
 #     return enemies
-
-def save_debug_frame(frame, result, debug_dir, processed_index, limit=200):
-    """Save an annotated preview image. Only runs for the first `limit` frames."""
-    if processed_index >= limit:
-        return
-    os.makedirs(debug_dir, exist_ok=True)
-    vis = frame.copy()
-
-    cv.drawMarker(vis, (result["crosshair_x"], result["crosshair_y"]),
-                   (0, 255, 0), cv.MARKER_CROSS, markerSize=20, thickness=2)
-
-    for b in result["enemy_positions"]:
-        cv.rectangle(vis, (b["x"], b["y"]), (b["x"]+b["w"], b["y"]+b["h"]), (0, 0, 255), 2)
-        cv.putText(vis, f"{b['confidence']:.2f}", (b["x"], b["y"]-6),
-                    cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-
-    cv.putText(vis,
-                f"frame={result['frame_number']}  t={result['timestamp_ms']:.0f}ms  "
-                f"method={result['detector_meta']['method']}  "
-                f"enemies={len(result['enemy_positions'])}",
-                (10, 24), cv.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1)
-
-    cv.imwrite(os.path.join(debug_dir, f"debug_{result['frame_number']:06d}.jpg"), vis)

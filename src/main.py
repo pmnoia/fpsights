@@ -1,12 +1,35 @@
 import os
+import cv2 as cv
+import numpy as np
 
 try:
     from src.utils.config import WINDOW_TITLE
 except ModuleNotFoundError:
     from utils.config import WINDOW_TITLE
 
+def detect_color(img):
+    img_hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
 
-import cv2 as cv
+    # lower_red = np.array([0, 120, 70]) 
+    # upper_red = np.array([10, 255, 255])
+
+    # lower_purple = np.array([130,60,60])
+    # upper_purple = np.array([155,255,255])
+
+    # lower_purple = np.array([130,80,80])
+    # upper_purple = np.array([165,255,255]) 
+
+    lower_purple = np.array([140,110,135])
+    upper_purple = np.array([155,255,255]) 
+
+    mask = cv.inRange(img_hsv, lower_purple, upper_purple)
+
+    result = cv.bitwise_and(img, img,mask=mask)
+
+    cv.imshow('Valorant Screenshot', result)
+
+    cv.waitKey(0)
+    cv.destroyAllWindows
 
 def main() -> None:
     print(f"{WINDOW_TITLE} setup is ready.")
@@ -46,15 +69,9 @@ def main() -> None:
     # cv.waitKey(0)
 
 
-    # TESTING detector
-    # frame = cv.imread('/Users/phonemaung/au/2026-1/csx3010/vids/ss/ss8.png')
-    # if frame is None:
-    #     print("ERROR: could not load image. Check the path.")
-    #     return
-    # test_result = detect(frame, frame_number=0, timestamp_ms=0.0, method="color", highlight_color="red")
-    # print("Crosshair:", test_result["crosshair_x"], test_result["crosshair_y"])
-    # print("Enemies found:", len(test_result["enemy_positions"]))
-    # print(test_result["enemy_positions"])
+    # TESTING
+    img = cv.imread('/Users/phonemaung/au/2026-1/csx3010/vids/ss/ss9.png')
+    detect_color(img)
 
 if __name__ == "__main__":
     main()

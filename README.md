@@ -9,6 +9,68 @@ FPSights is a desktop application that analyzes recorded FPS gameplay videos (VO
 - Player positioning heatmap with kill/death markers
 - Automated post-match report (in-app + PDF export)
 
+### Enemy Detection Direction
+
+Enemy detection supports the original FPSights reaction-time and crosshair
+features. It uses one custom YOLO model on recorded video and outputs enemy
+boxes for the analytics pipeline. The original MVP remains defined by
+`docs/SCOPE.md`; `docs/ENEMY_DETECTION_STRATEGY.md` explains this component.
+
+Initialize a local dataset and sample one frame per second from a recording:
+
+```bash
+python -m src.dataset.prepare_enemy_dataset init --root data/enemy_detection
+python -m src.dataset.prepare_enemy_dataset extract \
+  --root data/enemy_detection \
+  --video /path/to/recorded-match.mp4 \
+  --interval-seconds 1
+```
+
+Extracted images are written to `raw/images`, with exact source-frame metadata
+recorded in `sampling_manifest.csv`. Annotate those images using
+`annotations/ENEMY_BOX_GUIDE.md` before assigning complete videos or rounds to
+the train, validation, and test directories.
+
+The runtime code has two small interfaces:
+
+```python
+from src.analysis import EnemyDetector, ReactionTimeCalculator
+
+detector = EnemyDetector("path/to/best.pt")
+reaction = ReactionTimeCalculator()
+
+detections = detector.detect(frame)
+event = reaction.update(timestamp_ms, detections, (frame_width, frame_height))
+```
+
+`event` is returned when the first sustained aim correction is detected, or
+when an encounter ends without a measurable response.
+
+Train one small model after the frames have been annotated and split:
+
+```bash
+yolo detect train \
+  model=yolo11n.pt \
+  data=data/enemy_detection/data.yaml \
+  epochs=50 \
+  imgsz=640
+```
+
+After training, run the MVP analysis on a recorded video:
+
+```bash
+python -m src.analysis.analyze_video \
+  --video /path/to/recorded-match.mp4 \
+  --model /path/to/best.pt \
+  --output data/output/reactions.json
+```
+
+On CPU, add `--batch-size 8` to run inference in small batches while still
+processing every video frame in timestamp order. Use `--confidence` to apply a
+threshold calibrated on the held-out test split; the default is `0.25`.
+
+The JSON contains video metadata and reaction events only.
+
 ### Tech Stack
 - **Language:** Python 3.11+
 - **Desktop UI:** PySide6

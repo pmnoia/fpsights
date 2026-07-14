@@ -25,6 +25,7 @@ Thumbs.db
 
 # Project data
 data/vods/
+data/enemy_detection/
 *.mp4
 *.mkv
 

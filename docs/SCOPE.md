@@ -30,7 +30,7 @@ Players improve through subjective replay review. They lack objective, repeatabl
 - Platform: Desktop only (macOS first, cross-platform later)
 - Language: Python 3.11+
 - UI Framework: PySide6
-- CV: OpenCV (+ optional YOLO fallback for enemy detection)
+- CV: OpenCV for recorded video; one custom YOLO enemy detector
 - Database: SQLite (local)
 - Video Input: .mp4 / .mkv, 20–45 minutes
 - Processing: Offline, single-machine, async worker thread

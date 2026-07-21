@@ -1,68 +1,73 @@
 # FPSights
-## Desktop FPS VOD Analysis & Coaching Assistant
 
-FPSights is a desktop application that analyzes recorded FPS gameplay videos (VODs) and generates automated post-match coaching reports. It uses computer vision to measure crosshair placement, reaction time, and player positioning, then provides actionable insights for improvement.
+FPSights is a desktop FPS VOD analysis project. Enemy detection uses a trained
+YOLO model; color/HSV thresholding is no longer part of the pipeline.
 
-### Features (MVP)
-- Crosshair placement tracking and alignment scoring
-- Reaction time estimation from enemy encounters
-- Player positioning heatmap with kill/death markers
-- Automated post-match report (in-app + PDF export)
+The current goal is intentionally narrow: collect reliable CVAT annotations,
+train YOLO, and run repeatable inference on recorded gameplay. The existing UI
+and minimap assets remain available for later integration.
 
-### Tech Stack
-- **Language:** Python 3.11+
-- **Desktop UI:** PySide6
-- **Computer Vision:** OpenCV (+ optional YOLO)
-- **Database:** SQLite
-- **Reporting:** Matplotlib + ReportLab / HTML-to-PDF
+## Repository structure
 
-## Repository Structure
 ```text
 fpsights/
-├── UI/FPSights_Pro_UI/        
-│   └── fpsights_pro_ui.py
-├── src/                       
-│   ├── main.py
-│   └── utils/config.py
-├── docs/
-├── annotations/
-├── maps/
+├── src/
+│   ├── main.py                 # Video inference CLI
+│   └── pipeline/
+│       ├── detector.py         # YOLO adapter
+│       └── frame_reader.py     # Video frame iterator
+├── UI/FPSights_Pro_UI/         # Desktop UI prototype
+├── maps/                       # Minimap assets for future heatmaps
+├── docs/                       # Scope and team ownership
 ├── requirements.txt
 └── README.md
 ```
 
-## Project Setup
-Run these commands from the `fpsights` folder.
+Raw videos, screenshots, CVAT exports, model weights, training runs, and
+generated outputs are local-only and ignored by Git.
+
+## Setup
+
+Python 3.11 or newer is recommended.
 
 ```bash
-cd /Users/phonemaung/au/2026-1/csx3010/fpsights
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Launch UI Prototype
+## Run YOLO inference
+
+Use weights trained on the CVAT-exported enemy class:
+
 ```bash
-cd /Users/phonemaung/au/2026-1/csx3010/fpsights
-source venv/bin/activate
+python -m src.main \
+  --input videos/vod-01.mp4 \
+  --model models/best.pt \
+  --output output/vod-01.json
+```
+
+Useful options:
+
+- `--confidence 0.25` sets the minimum prediction confidence.
+- `--frame-skip 5` processes every fifth frame.
+- `--max-frames 100` limits a quick test run.
+- `--device mps` selects Apple Silicon acceleration when supported.
+- `--preview` opens a live preview; press `q` to stop.
+
+The pipeline assumes every class produced by the custom model is a relevant
+enemy class. Keep the first dataset simple with one class named `enemy`.
+
+## Dataset workflow
+
+Export annotations from CVAT in Ultralytics YOLO format and keep them under a
+local `datasets/` directory. One annotated recording is enough to validate the
+workflow, but not enough to judge generalization. Add recordings with different
+maps, agents, lighting/effects, resolutions, and enemy distances before relying
+on model metrics.
+
+## Launch the UI prototype
+
+```bash
 python UI/FPSights_Pro_UI/fpsights_pro_ui.py
 ```
-
-## Launch Current App Entry (non-UI stub)
-```bash
-cd /Users/phonemaung/au/2026-1/csx3010/fpsights
-source venv/bin/activate
-python src/main.py
-```
-
-## Annotation Assets
-- Schema guide: `annotations/ANNOTATION_GUIDE.md`
-- Sample labels: `annotations/vod_001_sample.csv`
-
-## Common Issues
-- **`ModuleNotFoundError: PySide6`**  
-  Make sure venv is activated and reinstall dependencies:
-  `pip install -r requirements.txt`
-- **UI does not open on macOS**  
-  Run the script directly (not from a restricted environment), and verify Python is from `venv/bin/python`.

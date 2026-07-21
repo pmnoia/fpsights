@@ -24,13 +24,14 @@ Players improve through subjective replay review. They lack objective, repeatabl
 - Multi-game support (start with one FPS title)
 - Cloud/web deployment
 - User accounts / multi-player comparison
+- Color/HSV thresholding for enemy detection
 
 ## Technical Constraints
 
 - Platform: Desktop only (macOS first, cross-platform later)
 - Language: Python 3.11+
 - UI Framework: PySide6
-- CV: OpenCV (+ optional YOLO fallback for enemy detection)
+- CV: YOLO for enemy detection; OpenCV for video I/O and frame processing
 - Database: SQLite (local)
 - Video Input: .mp4 / .mkv, 20–45 minutes
 - Processing: Offline, single-machine, async worker thread

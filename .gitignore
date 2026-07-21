@@ -25,12 +25,16 @@ Thumbs.db
 
 # Project data
 data/vods/
+datasets/
+screenshots/
 *.mp4
 *.mkv
+*.pt
 
 # Output files
 *.pdf
 output/
+runs/
 
 # SQLite databases
 *.db

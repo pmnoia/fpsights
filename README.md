@@ -1,30 +1,37 @@
 # FPSights
 
-FPSights is a desktop FPS VOD analysis project. Enemy detection uses a trained
-YOLO model; color/HSV thresholding is no longer part of the pipeline.
+FPSights processes recorded Valorant matches in two stages:
 
-The current goal is intentionally narrow: collect reliable CVAT annotations,
-train YOLO, and run repeatable inference on recorded gameplay. The existing UI
-and minimap assets remain available for later integration.
+1. Find live-round gameplay and exclude menus, buy phases, and round-end screens.
+2. Run a trained YOLO enemy detector only on those live ranges.
 
-## Repository structure
+The processor works before YOLO training is finished. Run it without a model to
+create and review the segmentation timeline, then use the same command with
+`best.pt` after the CVAT dataset has been trained.
+
+## Project structure
 
 ```text
 fpsights/
 ├── src/
-│   ├── main.py                 # Video inference CLI
+│   ├── main.py                 # One-command video processor
+│   ├── segment.py              # Optional segmentation-only utility
 │   └── pipeline/
-│       ├── detector.py         # YOLO adapter
-│       └── frame_reader.py     # Video frame iterator
+│       ├── processor.py        # Segmentation + YOLO orchestration
+│       ├── segmentation.py     # Valorant round/phase timeline
+│       ├── detector.py         # Ultralytics YOLO adapter
+│       └── frame_reader.py     # Time-range-aware frame reader
 ├── UI/FPSights_Pro_UI/         # Desktop UI prototype
-├── maps/                       # Minimap assets for future heatmaps
 ├── docs/                       # Scope and team ownership
-├── requirements.txt
-└── README.md
+├── tests/
+└── requirements.txt
 ```
 
-Raw videos, screenshots, CVAT exports, model weights, training runs, and
-generated outputs are local-only and ignored by Git.
+Raw videos, datasets, model weights, and generated output are intentionally
+ignored by Git.
+
+See [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) for the CVAT handoff rules and the
+recommended build order while footage is still being collected.
 
 ## Setup
 
@@ -36,35 +43,95 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run YOLO inference
+If `ffmpeg` is installed, FPSights uses it automatically for faster sampled
+decoding during segmentation. OpenCV remains the built-in fallback.
 
-Use weights trained on the CVAT-exported enemy class:
+## Run now: segmentation only
+
+No YOLO model is required yet:
 
 ```bash
-python -m src.main \
-  --input videos/vod-01.mp4 \
-  --model models/best.pt \
-  --output output/vod-01.json
+python -m src.main videos/vod-01.mp4
 ```
+
+This writes the following files to `output/vod-01/`:
+
+- `segments.json` — complete buy/live/round-end/non-gameplay timeline.
+- `run.json` — small machine-readable run summary for future UI integration.
+
+Only `live` intervals are copied into `analysis_ranges`. Detection and future
+analytics use those ranges while keeping timestamps tied to the original VOD.
+
+## Run after CVAT training: segmentation + YOLO
+
+Export the CVAT annotations in Ultralytics YOLO format and train a detection
+model with one initial class named `enemy`. Then point the processor at the
+training run's `best.pt`:
+
+```bash
+python -m src.main videos/vod-01.mp4 \
+  --model models/best.pt \
+  --device mps \
+  --review-video
+```
+
+The output directory will also contain:
+
+- `detections.json` — source frame/timestamp, round, crosshair center, boxes,
+  class names, and confidence values.
+- `metrics.json` — crosshair score, aim-acquisition timing, and event markers
+  ready for the desktop UI.
+- `review.mp4` — compact live-round video with detection boxes for quick QA.
+
+The review video contains only sampled live gameplay and has no audio. The
+original VOD and JSON timestamps remain the authoritative analysis sources.
+Aim-acquisition timing is the interval from first enemy detection until the
+crosshair reaches the upper part of an enemy box. It is an explainable proxy;
+it must not be presented as shot reaction time until shot detection is added
+and validated against manually timed examples.
 
 Useful options:
 
-- `--confidence 0.25` sets the minimum prediction confidence.
-- `--frame-skip 5` processes every fifth frame.
-- `--max-frames 100` limits a quick test run.
-- `--device mps` selects Apple Silicon acceleration when supported.
-- `--preview` opens a live preview; press `q` to stop.
+- `--confidence 0.25` changes the minimum YOLO confidence.
+- `--frame-skip 5` processes every fifth live-gameplay frame.
+- `--max-frames 100` runs a short pipeline smoke test.
+- `--device cpu`, `--device mps`, or `--device 0` selects the inference device.
+- `--preview` shows detections while processing; press `q` to stop.
+- `--output-dir output/custom-name` chooses a different artifact directory.
 
-The pipeline assumes every class produced by the custom model is a relevant
-enemy class. Keep the first dataset simple with one class named `enemy`.
+## Reuse or correct a segmentation timeline
 
-## Dataset workflow
+The automatically generated timeline is conservative. If it needs correction,
+edit a copy of `segments.json` and pass it back to the processor:
 
-Export annotations from CVAT in Ultralytics YOLO format and keep them under a
-local `datasets/` directory. One annotated recording is enough to validate the
-workflow, but not enough to judge generalization. Add recordings with different
-maps, agents, lighting/effects, resolutions, and enemy distances before relying
-on model metrics.
+```bash
+python -m src.main videos/vod-01.mp4 \
+  --segments output/vod-01/segments.json \
+  --model models/best.pt
+```
+
+The processor validates that ranges belong to the same video, are sorted,
+non-overlapping, and stay inside the source duration.
+
+For optional per-round playback clips, the separate segmentation utility is
+still available and uses `ffmpeg` stream copy:
+
+```bash
+python -m src.segment \
+  --input videos/vod-01.mp4 \
+  --output output/vod-01-segments.json \
+  --clips-dir output/vod-01-rounds
+```
+
+## Validate the pipeline
+
+```bash
+python -m pytest -q
+```
+
+The tests exercise segmentation timelines, range-aware frame reading, YOLO
+result serialization, segmentation-only processing, and the full detection +
+review-video path with a local fake model.
 
 ## Launch the UI prototype
 

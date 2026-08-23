@@ -27,9 +27,14 @@ Thumbs.db
 data/vods/
 datasets/
 screenshots/
+videos/
+cvat-annotated-files/
 *.mp4
 *.mkv
 *.pt
+
+# Python test cache
+.pytest_cache/
 
 # Output files
 *.pdf

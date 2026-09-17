@@ -1,6 +1,6 @@
-"""End-to-end video processing orchestration.
+"""End-to-end video processing
 
-The processor always creates a gameplay timeline.  Enemy detection is optional,
+The processor always creates a gameplay timeline.  Enemy detection is work-in-progress,
 so the same command works before and after trained YOLO weights are available.
 """
 
@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import cv2 as cv
+from PySide6.QtCore import QObject, Signal, Slot
 
 from .analytics import analyze_detections
 from .detector import YoloDetector, draw_detections
 from .frame_reader import read_frames
+from .positioning import MinimapTracker
 from .segmentation import SegmentationConfig, probe_video, segment_video
 
 
@@ -49,6 +51,29 @@ class ProcessingConfig:
         if self.model_path is None and (self.preview or self.review_video):
             raise ValueError("preview and review_video require YOLO model weights")
 
+
+class AnalysisWorker(QObject):
+    progress = Signal(int, int)
+    succeeded = Signal(dict)
+    failed = Signal(str)
+    finished = Signal()
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+    @Slot()
+    def run(self):
+        try:
+            result = process_video(
+                self.config,
+                progress=lambda done, total: self.progress.emit(done, total),
+            )
+            self.succeeded.emit(result)
+        except Exception as error:
+            self.failed.emit(str(error))
+        finally:
+            self.finished.emit()
 
 def process_video(
     config: ProcessingConfig,
@@ -94,6 +119,8 @@ def process_video(
             "detections": None,
             "metrics": None,
             "review_video": None,
+            "positioning": None,
+            "heatmap": None,
         },
         "segmentation": plan["summary"],
         "detection": None,
@@ -119,6 +146,8 @@ def process_video(
     review_path = config.output_dir / "review.mp4" if config.review_video else None
     writer = _open_review_writer(review_path, info, config.frame_skip)
     frame_results: list[dict[str, Any]] = []
+    positioning_points: list[dict[str, Any]] = []
+    minimap_tracker = MinimapTracker()
     stopped_by_user = False
 
     try:
@@ -138,6 +167,17 @@ def process_video(
                 start_ms=interval["start_ms"],
                 end_ms=interval["end_ms"],
             ):
+                position = minimap_tracker.observe(frame, interval["segment_id"])
+                if position is not None:
+                    positioning_points.append(
+                        {
+                            "frame_number": frame_number,
+                            "timestamp_ms": int(round(frame_number / info.fps * 1000)),
+                            "segment_id": interval["segment_id"],
+                            "round_number": interval["round_number"],
+                            **position,
+                        }
+                    )
                 detection = detector.detect(frame)
                 record = {
                     "frame_number": frame_number,
@@ -185,11 +225,33 @@ def process_video(
         },
     )
 
+    positioning_path = config.output_dir / "positioning.json"
+    _write_json(
+        positioning_path,
+        {
+            "schema_version": 1,
+            "video": str(config.video_path),
+            "coordinate_space": "normalized top-left minimap crop",
+            "sample_count": len(positioning_points),
+            "points": positioning_points,
+        },
+    )
+    heatmap_path = config.output_dir / "heatmap.png"
+    heatmap_written = minimap_tracker.render(positioning_points, heatmap_path)
+
     metrics_path = config.output_dir / "metrics.json"
     analytics = analyze_detections(
         frame_results,
         max_gap_ms=max(250, round(3 * config.frame_skip / info.fps * 1000)),
     )
+    analytics["summary"]["positioning"] = {
+        "sample_count": len(positioning_points),
+        "coverage_percent": (
+            round(len(positioning_points) / len(frame_results) * 100, 1)
+            if frame_results
+            else 0.0
+        ),
+    }
     _write_json(
         metrics_path,
         {
@@ -204,6 +266,10 @@ def process_video(
                     "Time from first enemy detection until the crosshair enters "
                     "the upper 35 percent of an enemy box; not shot reaction time."
                 ),
+                "positioning": (
+                    "Normalized player-marker locations detected from the "
+                    "top-left minimap crop."
+                ),
             },
             **analytics,
         },
@@ -215,6 +281,8 @@ def process_video(
     result["artifacts"]["review_video"] = (
         str(review_path) if review_path is not None else None
     )
+    result["artifacts"]["positioning"] = str(positioning_path)
+    result["artifacts"]["heatmap"] = str(heatmap_path) if heatmap_written else None
     result["detection"] = detection_summary
     result["analytics"] = analytics["summary"]
     _write_json(config.output_dir / "run.json", result)

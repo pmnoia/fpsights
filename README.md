@@ -1,5 +1,7 @@
 # FPSights
 
+New to the code? Start with the [one-hour Python and architecture guide](docs/ONE_HOUR_CODE_GUIDE.md).
+
 Current coaching workflow: [simple coaching and metric definitions](docs/SIMPLE_COACHING.md). The app now shows a shared coaching report instead of automatically selected lesson clips.
 
 FPSights processes recorded Valorant matches in two stages:
@@ -149,9 +151,6 @@ python UI/FPSights_Pro_UI/fpsights_pro_ui.py
 ## Final defence preparation
 
 - [Current project status and MVP gaps](docs/PROJECT_STATUS.md)
-- [Code reading guide](docs/CODE_GUIDE.md)
-- [Detailed final report outline and draft content](docs/FINAL_REPORT_OUTLINE.md)
-- [Free sharing/deployment steps you can follow yourself](docs/FREE_DEPLOYMENT.md)
 
 The original scope remains in `docs/SCOPE.md`; the status audit explains partial
 requirements and unverified targets. The app is native PySide6: a Vercel page can

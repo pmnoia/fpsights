@@ -124,13 +124,12 @@ def generate_pdf_report(result: dict[str, Any], output_path: Path) -> Path:
             _duration(segmentation.get("analyzable_duration_ms")),
         ],
     ]
-    summary_rows = [
-        [
-            Paragraph(escape(str(value)), styles["FPSightsTableHeader" if row_index == 0 else "FPSightsTableCell"])
-            for value in row
-        ]
-        for row_index, row in enumerate(summary_rows)
-    ]
+    formatted_rows = []
+    for row_index, row in enumerate(summary_rows):
+        style = styles["FPSightsTableHeader" if row_index == 0 else "FPSightsTableCell"]
+        formatted_row = [Paragraph(escape(str(value)), style) for value in row]
+        formatted_rows.append(formatted_row)
+    summary_rows = formatted_rows
     summary_table = Table(summary_rows, colWidths=[42 * mm, 35 * mm, 79 * mm])
     summary_table.setStyle(
         TableStyle(

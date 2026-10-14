@@ -17,16 +17,13 @@ def confirm_tracks(
     """
     if max_gap_ms < 0:
         raise ValueError("max_gap_ms cannot be negative")
-    output = [
-        {
-            **frame,
-            "enemy_positions": [
-                {**box, "track_id": None, "confirmed": False}
-                for box in frame.get("enemy_positions", [])
-            ],
-        }
-        for frame in frames
-    ]
+    # Copy the input so adding track IDs cannot change the saved raw detections.
+    output = []
+    for frame in frames:
+        boxes = []
+        for box in frame.get("enemy_positions", []):
+            boxes.append({**box, "track_id": None, "confirmed": False})
+        output.append({**frame, "enemy_positions": boxes})
     active: dict[int, tuple[str | None, int, dict[str, Any]]] = {}
     observations: dict[int, list[dict[str, Any]]] = {}
     next_id = 1
@@ -34,20 +31,22 @@ def confirm_tracks(
     for frame in output:
         timestamp = frame["timestamp_ms"]
         segment = frame.get("segment_id")
-        active = {
-            track_id: state for track_id, state in active.items()
-            if state[0] == segment and 0 <= timestamp - state[1] <= max_gap_ms
-        }
+        # Old tracks cannot be matched after a new round or a long gap.
+        still_active = {}
+        for track_id, state in active.items():
+            same_round = state[0] == segment
+            close_in_time = 0 <= timestamp - state[1] <= max_gap_ms
+            if same_round and close_in_time:
+                still_active[track_id] = state
+        active = still_active
         boxes = frame["enemy_positions"]
-        possible = sorted(
-            (
-                (box_overlap(previous, box), track_id, index)
-                for track_id, (_, _, previous) in active.items()
-                for index, box in enumerate(boxes)
-                if box.get("class_name") == "enemy"
-            ),
-            reverse=True,
-        )
+        possible = []
+        for track_id, (_, _, previous_box) in active.items():
+            for index, box in enumerate(boxes):
+                if box.get("class_name") == "enemy":
+                    overlap = box_overlap(previous_box, box)
+                    possible.append((overlap, track_id, index))
+        possible.sort(reverse=True)
         used_tracks: set[int] = set()
         used_boxes: set[int] = set()
         for overlap, track_id, index in possible:
@@ -79,10 +78,11 @@ def confirm_tracks(
             confirmed_boxes += len(boxes)
             for box in boxes:
                 box["confirmed"] = True
+    isolated_boxes = sum(len(boxes) == 1 for boxes in observations.values())
     return output, {
         "tracks": len(observations),
         "confirmed_tracks": confirmed_tracks,
         "confirmed_boxes": confirmed_boxes,
-        "isolated_boxes": sum(len(boxes) == 1 for boxes in observations.values()),
+        "isolated_boxes": isolated_boxes,
     }
 

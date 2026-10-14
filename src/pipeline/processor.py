@@ -38,6 +38,7 @@ class ProcessingConfig:
     review_video: bool = False
 
     def validate(self) -> None:
+        """Reject settings that would make this processing run invalid."""
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0 and 1")
         if self.frame_skip < 1:
@@ -297,7 +298,7 @@ def load_analysis_plan(
     video_path: Path,
     video_duration_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Load a reviewed segmentation plan and validate its analysis ranges."""
+    """Read a saved round timeline and check that its live ranges fit this video."""
     if not plan_path.is_file():
         raise FileNotFoundError(f"Could not find segmentation JSON: {plan_path}")
 
@@ -355,6 +356,7 @@ def _estimated_frame_count(
     frame_skip: int,
     limit: int | None,
 ) -> int:
+    """Estimate how many sampled live frames the progress bar should expect."""
     count = sum(
         max(0, round((item["end_ms"] - item["start_ms"]) / 1000 * fps))
         for item in ranges
@@ -396,18 +398,21 @@ def _annotate_frame(frame: Any, record: dict[str, Any]) -> Any:
 
 
 def _detection_summary(frames: list[dict[str, Any]]) -> dict[str, Any]:
-    detections = [
-        detection
-        for frame in frames
-        for detection in frame["enemy_positions"]
-    ]
-    counts = Counter(item["class_name"] for item in detections)
+    """Count analyzed frames and the enemy boxes found in them."""
+    counts: Counter[str] = Counter()
+    frames_with_detections = 0
+    total_detections = 0
+    for frame in frames:
+        boxes = frame["enemy_positions"]
+        if boxes:
+            frames_with_detections += 1
+        total_detections += len(boxes)
+        for box in boxes:
+            counts[box["class_name"]] += 1
     return {
         "processed_frames": len(frames),
-        "frames_with_detections": sum(
-            bool(frame["enemy_positions"]) for frame in frames
-        ),
-        "total_detections": len(detections),
+        "frames_with_detections": frames_with_detections,
+        "total_detections": total_detections,
         "detections_by_class": dict(sorted(counts.items())),
     }
 

@@ -25,12 +25,14 @@ CREATE TABLE IF NOT EXISTS matches (
 
 
 def initialize_history(database_path: Path) -> None:
+    """Create the local history table if it does not exist yet."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database_path) as connection:
         connection.execute(SCHEMA)
 
 
 def save_analysis(database_path: Path, result: dict[str, Any]) -> None:
+    """Insert or update one analysis in the local history database."""
     initialize_history(database_path)
     analytics = result.get("analytics") or {}
     crosshair = analytics.get("crosshair") or {}
@@ -80,6 +82,7 @@ def save_analysis(database_path: Path, result: dict[str, Any]) -> None:
 
 
 def list_analyses(database_path: Path, limit: int = 50) -> list[dict[str, Any]]:
+    """Return the most recently analyzed videos first."""
     initialize_history(database_path)
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -91,4 +94,5 @@ def list_analyses(database_path: Path, limit: int = 50) -> list[dict[str, Any]]:
 
 
 def _number_or_none(value: Any) -> float | None:
+    """Keep a numeric metric or store a missing value as ``None``."""
     return float(value) if isinstance(value, (int, float)) else None

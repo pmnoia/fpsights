@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import cv2 as cv
 import numpy as np
@@ -41,6 +42,18 @@ class _FakeDetector:
         }
 
 
+class _FakeVisibleDetector(_FakeDetector):
+    def detect(self, _frame) -> dict:
+        return {
+            "crosshair_x": 32,
+            "crosshair_y": 24,
+            "enemy_positions": [
+                {"x": 15, "y": 0, "w": 10, "h": 40, "confidence": 0.8,
+                 "class_id": 0, "class_name": "enemy"}
+            ],
+        }
+
+
 def _write_plan(path: Path, video_path: Path, ranges: list[dict]) -> None:
     path.write_text(
         json.dumps(
@@ -72,6 +85,7 @@ def test_segmentation_only_is_ready_before_model_training(
     plan_path = tmp_path / "reviewed.json"
     output_dir = tmp_path / "output"
     _write_test_video(video_path)
+    (tmp_path / "unused.pt").touch()
     _write_plan(plan_path, video_path, [])
 
     result = process_video(
@@ -97,6 +111,7 @@ def test_yolo_processes_only_live_ranges_and_writes_review_video(
     plan_path = tmp_path / "segments.json"
     output_dir = tmp_path / "output"
     _write_test_video(video_path)
+    (tmp_path / "unused.pt").touch()
     _write_plan(
         plan_path,
         video_path,
@@ -136,6 +151,33 @@ def test_yolo_processes_only_live_ranges_and_writes_review_video(
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["summary"]["crosshair"]["evaluated_frames"] == 0
     assert result["artifacts"]["metrics"].endswith("metrics.json")
+    assert result["lessons"] is None
+    assert not (output_dir / "lessons.json").exists()
+
+
+def test_pipeline_keeps_metrics_without_generating_lesson_clips(tmp_path: Path) -> None:
+    video_path = tmp_path / "vod.mp4"
+    plan_path = tmp_path / "segments.json"
+    output_dir = tmp_path / "output"
+    _write_test_video(video_path)
+    (tmp_path / "unused.pt").touch()
+    _write_plan(
+        plan_path, video_path,
+        [{"segment_id": "segment-1", "round_number": 1, "start_ms": 0, "end_ms": 3_000}],
+    )
+
+    result = process_video(
+        ProcessingConfig(
+            video_path=video_path, output_dir=output_dir,
+            model_path=tmp_path / "unused.pt", segments_path=plan_path,
+            frame_skip=1,
+        ),
+        detector_factory=_FakeVisibleDetector,
+    )
+
+    assert result["analytics"]["crosshair"]["evaluated_frames"] > 0
+    assert result["lessons"] is None
+    assert not list(output_dir.glob("lesson*"))
 
 
 def test_manifest_rejects_a_different_video(tmp_path: Path) -> None:

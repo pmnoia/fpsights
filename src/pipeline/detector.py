@@ -5,6 +5,8 @@ from typing import Any
 
 import cv2 as cv
 
+from src.settings import DEFAULT_IMAGE_SIZE
+
 
 class YoloDetector:
     """Load trained YOLO weights and return JSON-friendly detections."""
@@ -41,6 +43,7 @@ class YoloDetector:
         prediction = self.model.predict(
             source=frame,
             conf=self.confidence,
+            imgsz=DEFAULT_IMAGE_SIZE,
             device=self.device,
             verbose=False,
         )[0]

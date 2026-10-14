@@ -1,4 +1,4 @@
-"""Approximate player movement from the Valorant minimap marker."""
+"""Approximate viewed POV activity from the Valorant minimap marker."""
 
 from __future__ import annotations
 
@@ -10,28 +10,34 @@ import numpy as np
 
 
 class MinimapTracker:
-    """Track the small yellow player marker in the top-left minimap."""
+    """Track white POV markers; color alone does not establish player identity."""
 
     def __init__(self) -> None:
         self.previous: tuple[float, float] | None = None
         self.segment_id: str | None = None
         self.background: np.ndarray | None = None
+        self.misses = 0
 
     def observe(self, frame: np.ndarray, segment_id: str) -> dict[str, float] | None:
         if segment_id != self.segment_id:
             self.segment_id = segment_id
             self.previous = None
+            self.misses = 0
 
         roi = _minimap_roi(frame)
         if self.background is None:
             self.background = roi.copy()
 
-        candidates = _yellow_candidates(roi)
+        candidates = _white_candidates(roi)
         if not candidates:
+            self._miss()
             return None
 
         if self.previous is None:
-            selected = max(candidates, key=lambda item: item[0])
+            # White map labels can resemble a marker. Do not guess between them.
+            if len(candidates) != 1:
+                return None
+            selected = candidates[0]
         else:
             selected = min(
                 candidates,
@@ -44,13 +50,22 @@ class MinimapTracker:
                 (selected[1] - self.previous[0]) ** 2
                 + (selected[2] - self.previous[1]) ** 2
             ) ** 0.5
-            if distance > 45:
+            if distance > 45 * frame.shape[1] / 1920:
+                self._miss()
                 return None
 
         _, x, y = selected
         self.previous = (x, y)
+        self.misses = 0
         height, width = roi.shape[:2]
         return {"x": round(x / width, 6), "y": round(y / height, 6)}
+
+    def _miss(self) -> None:
+        # Reacquire after a gap or POV jump instead of staying locked forever.
+        # This is continuity handling, not evidence of death or identity.
+        self.misses += 1
+        if self.misses >= 3:
+            self.previous = None
 
     def render(self, points: list[dict[str, Any]], output_path: Path) -> bool:
         if self.background is None or not points:
@@ -64,7 +79,8 @@ class MinimapTracker:
         for point in points:
             x = min(width - 1, max(0, round(float(point["x"]) * width)))
             y = min(height - 1, max(0, round(float(point["y"]) * height)))
-            cv.circle(density, (x, y), radius, 1.0, -1, cv.LINE_AA)
+            # Each observation adds a visit; repeated visits must accumulate.
+            density[y, x] += 1.0
 
         density = cv.GaussianBlur(density, (0, 0), sigmaX=radius * 1.4)
         maximum = float(density.max())
@@ -82,7 +98,7 @@ class MinimapTracker:
         cv.rectangle(blended, (0, 0), (width, 34), (7, 13, 20), -1)
         cv.putText(
             blended,
-            f"PLAYER MOVEMENT HEATMAP - {len(points)} samples",
+            f"POV MINIMAP HEATMAP - {len(points)} samples",
             (12, 23),
             cv.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -99,18 +115,21 @@ def _minimap_roi(frame: np.ndarray) -> np.ndarray:
     return frame[: max(1, round(height * 0.37)), : max(1, round(width * 0.225))]
 
 
-def _yellow_candidates(roi: np.ndarray) -> list[tuple[int, float, float]]:
+def _white_candidates(roi: np.ndarray) -> list[tuple[int, float, float]]:
     hsv = cv.cvtColor(roi, cv.COLOR_BGR2HSV)
-    mask = cv.inRange(hsv, (20, 100, 120), (45, 255, 255))
+    mask = cv.inRange(hsv, (0, 0, 210), (179, 45, 255))
     _, _, stats, centroids = cv.connectedComponentsWithStats(mask)
     height, width = roi.shape[:2]
     candidates: list[tuple[int, float, float]] = []
+    scale = width / 432
 
     for stat, centroid in zip(stats[1:], centroids[1:]):
         x, y, component_width, component_height, area = map(int, stat)
-        if not 8 <= area <= 120:
+        if not 8 * scale ** 2 <= area <= 180 * scale ** 2:
             continue
-        if component_width > 22 or component_height > 16:
+        if component_width > 22 * scale or component_height > 22 * scale:
+            continue
+        if area / (component_width * component_height) < 0.35:
             continue
         if x >= width * 0.85 or y <= height * 0.1:
             continue

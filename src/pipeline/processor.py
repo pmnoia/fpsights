@@ -1,8 +1,4 @@
-"""End-to-end video processing
-
-The processor always creates a gameplay timeline.  Enemy detection is work-in-progress,
-so the same command works before and after trained YOLO weights are available.
-"""
+"""End-to-end video processing and artifact generation."""
 
 from __future__ import annotations
 
@@ -14,13 +10,15 @@ from pathlib import Path
 from typing import Any
 
 import cv2 as cv
-from PySide6.QtCore import QObject, Signal, Slot
+
+from src.settings import DEFAULT_CONFIDENCE, DEFAULT_FRAME_SKIP, DEFAULT_SAMPLE_RATE, DEFAULT_IMAGE_SIZE
 
 from .analytics import analyze_detections
 from .detector import YoloDetector, draw_detections
 from .frame_reader import read_frames
 from .positioning import MinimapTracker
 from .segmentation import SegmentationConfig, probe_video, segment_video
+from .tracking import confirm_tracks
 
 
 @dataclass(frozen=True)
@@ -31,9 +29,9 @@ class ProcessingConfig:
     output_dir: Path
     model_path: Path | None = None
     segments_path: Path | None = None
-    confidence: float = 0.25
-    frame_skip: int = 5
-    sample_rate: float = 2.0
+    confidence: float = DEFAULT_CONFIDENCE
+    frame_skip: int = DEFAULT_FRAME_SKIP
+    sample_rate: float = DEFAULT_SAMPLE_RATE
     max_frames: int | None = None
     device: str | None = None
     preview: bool = False
@@ -52,34 +50,12 @@ class ProcessingConfig:
             raise ValueError("preview and review_video require YOLO model weights")
 
 
-class AnalysisWorker(QObject):
-    progress = Signal(int, int)
-    succeeded = Signal(dict)
-    failed = Signal(str)
-    finished = Signal()
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-    @Slot()
-    def run(self):
-        try:
-            result = process_video(
-                self.config,
-                progress=lambda done, total: self.progress.emit(done, total),
-            )
-            self.succeeded.emit(result)
-        except Exception as error:
-            self.failed.emit(str(error))
-        finally:
-            self.finished.emit()
-
 def process_video(
     config: ProcessingConfig,
     *,
     detector_factory: Callable[..., Any] = YoloDetector,
     progress: Callable[[int, int], None] | None = None,
+    status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Segment a video and optionally run YOLO over its live ranges.
 
@@ -88,6 +64,10 @@ def process_video(
     ``run.json``.  Detection artifacts are only created when a model is given.
     """
     config.validate()
+    if config.model_path is not None and not config.model_path.is_file():
+        raise FileNotFoundError(f"Could not find YOLO weights: {config.model_path}")
+    if status:
+        status("Finding live rounds in the video...")
     info = probe_video(config.video_path)
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,10 +90,14 @@ def process_video(
 
     result: dict[str, Any] = {
         "schema_version": 1,
+        "analysis_version": 3,
+        "inference_image_size": DEFAULT_IMAGE_SIZE,
         "status": "segmented" if config.model_path is None else "processing",
         "video": asdict(info),
         "model": str(config.model_path) if config.model_path else None,
         "segment_source": segment_source,
+        "frame_skip": config.frame_skip,
+        "limited_run": config.max_frames is not None,
         "artifacts": {
             "segments": str(segments_output),
             "detections": None,
@@ -121,22 +105,28 @@ def process_video(
             "review_video": None,
             "positioning": None,
             "heatmap": None,
+            "lessons": None,
         },
         "segmentation": plan["summary"],
         "detection": None,
         "analytics": None,
+        "lessons": None,
     }
 
     if config.model_path is None:
         _write_json(config.output_dir / "run.json", result)
         return result
 
+    if status:
+        status("Loading the enemy detector...")
     detector = detector_factory(
         config.model_path,
         config.confidence,
         config.device,
     )
     ranges = plan["analysis_ranges"]
+    if status:
+        status("Detecting enemies in live gameplay...")
     total_frames = _estimated_frame_count(
         ranges,
         info.fps,
@@ -209,6 +199,12 @@ def process_video(
         if config.preview:
             cv.destroyAllWindows()
 
+    if status:
+        status("Building metrics and report...")
+    tracking_gap_ms = max(250, round(3 * config.frame_skip / info.fps * 1000))
+    frame_results, tracking_summary = confirm_tracks(
+        frame_results, max_gap_ms=tracking_gap_ms
+    )
     detections_path = config.output_dir / "detections.json"
     detection_summary = _detection_summary(frame_results)
     _write_json(
@@ -220,6 +216,7 @@ def process_video(
             "confidence_threshold": config.confidence,
             "frame_skip": config.frame_skip,
             "analysis_ranges": ranges,
+            "tracking": tracking_summary,
             **detection_summary,
             "frames": frame_results,
         },
@@ -232,6 +229,8 @@ def process_video(
             "schema_version": 1,
             "video": str(config.video_path),
             "coordinate_space": "normalized top-left minimap crop",
+            "tracking_subject": "viewed POV; may include spectated teammates",
+            "identity_verified": False,
             "sample_count": len(positioning_points),
             "points": positioning_points,
         },
@@ -242,8 +241,9 @@ def process_video(
     metrics_path = config.output_dir / "metrics.json"
     analytics = analyze_detections(
         frame_results,
-        max_gap_ms=max(250, round(3 * config.frame_skip / info.fps * 1000)),
+        max_gap_ms=tracking_gap_ms,
     )
+    analytics["summary"]["detection_quality"] = tracking_summary
     analytics["summary"]["positioning"] = {
         "sample_count": len(positioning_points),
         "coverage_percent": (
@@ -260,15 +260,17 @@ def process_video(
             "definitions": {
                 "crosshair_score": (
                     "Distance from the crosshair to the estimated head point "
-                    "inside each enemy box."
+                    "inside temporally confirmed enemy boxes; an estimate, not accuracy."
                 ),
                 "aim_reaction": (
-                    "Time from first enemy detection until the crosshair enters "
-                    "the upper 35 percent of an enemy box; not shot reaction time."
+                    "Time from first confirmed track detection until the crosshair "
+                    "enters that target's upper box area, for measured tracks only; "
+                    "not shot reaction time."
                 ),
                 "positioning": (
-                    "Normalized player-marker locations detected from the "
-                    "top-left minimap crop."
+                    "White POV-marker locations in the top-left minimap crop; "
+                    "may include spectated teammates. Identity and alive state are not verified. "
+                    "Rotating or centered minimaps do not give fixed map coordinates."
                 ),
             },
             **analytics,
@@ -279,11 +281,12 @@ def process_video(
     result["artifacts"]["detections"] = str(detections_path)
     result["artifacts"]["metrics"] = str(metrics_path)
     result["artifacts"]["review_video"] = (
-        str(review_path) if review_path is not None else None
+        str(review_path) if review_path is not None and frame_results else None
     )
     result["artifacts"]["positioning"] = str(positioning_path)
     result["artifacts"]["heatmap"] = str(heatmap_path) if heatmap_written else None
     result["detection"] = detection_summary
+    result["detection"]["tracking"] = tracking_summary
     result["analytics"] = analytics["summary"]
     _write_json(config.output_dir / "run.json", result)
     return result

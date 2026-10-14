@@ -1,5 +1,8 @@
 # FPSights — Scope Document
 
+This is the original proposal. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the
+4 October 2026 implementation audit, partial requirements, and unmet or unverified targets.
+
 ## Project Identity
 
 - **App Name:** FPSights

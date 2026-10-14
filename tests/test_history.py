@@ -24,3 +24,15 @@ def test_saves_and_lists_completed_analysis(tmp_path) -> None:
     assert rows[0]["video_path"] == "/videos/example.mp4"
     assert rows[0]["crosshair_score"] == 49.1
     assert rows[0]["minimap_coverage"] == 96.5
+
+
+def test_segmentation_only_runs_keep_separate_history_entries(tmp_path) -> None:
+    database = tmp_path / "fpsights.sqlite"
+    for name in ("first", "second"):
+        save_analysis(database, {
+            "video": {"path": f"{name}.mp4"},
+            "artifacts": {"metrics": None, "segments": str(tmp_path / name / "segments.json")},
+        })
+    rows = list_analyses(database)
+    assert len(rows) == 2
+    assert {row["run_path"] for row in rows} == {str(tmp_path / "first"), str(tmp_path / "second")}

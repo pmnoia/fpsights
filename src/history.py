@@ -41,7 +41,11 @@ def save_analysis(database_path: Path, result: dict[str, Any]) -> None:
     artifacts = result.get("artifacts") or {}
     video = result.get("video") or {}
 
-    run_path = str(Path(str(artifacts.get("metrics", "unknown"))).parent)
+    # Segmentation-only runs have no metrics, but still have a segments file.
+    artifact_path = artifacts.get("metrics") or artifacts.get("segments")
+    if not artifact_path:
+        raise ValueError("Analysis is missing its metrics or segments artifact path")
+    run_path = str(Path(artifact_path).parent)
     values = (
         datetime.now().isoformat(timespec="seconds"),
         str(video.get("path", "Unknown video")),

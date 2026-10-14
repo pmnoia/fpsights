@@ -1,13 +1,14 @@
 # FPSights
 
+Current coaching workflow: [simple coaching and metric definitions](docs/SIMPLE_COACHING.md). The app now shows a shared coaching report instead of automatically selected lesson clips.
+
 FPSights processes recorded Valorant matches in two stages:
 
 1. Find live-round gameplay and exclude menus, buy phases, and round-end screens.
 2. Run a trained YOLO enemy detector only on those live ranges.
 
-The processor works before YOLO training is finished. Run it without a model to
-create and review the segmentation timeline, then use the same command with
-`best.pt` after the CVAT dataset has been trained.
+The processor can run with or without a YOLO model. The desktop UI turns
+temporally supported detections into a simple coaching report for beginners.
 
 ## Project structure
 
@@ -21,7 +22,7 @@ fpsights/
 │       ├── segmentation.py     # Valorant round/phase timeline
 │       ├── detector.py         # Ultralytics YOLO adapter
 │       └── frame_reader.py     # Time-range-aware frame reader
-├── UI/FPSights_Pro_UI/         # Desktop UI prototype
+├── UI/FPSights_Pro_UI/         # Desktop UI
 ├── docs/                       # Scope and team ownership
 ├── tests/
 └── requirements.txt
@@ -30,8 +31,12 @@ fpsights/
 Raw videos, datasets, model weights, and generated output are intentionally
 ignored by Git.
 
-See [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) for the CVAT handoff rules and the
-recommended build order while footage is still being collected.
+See [docs/BEGINNER_REVIEW_AND_TRAINING.md](docs/BEGINNER_REVIEW_AND_TRAINING.md)
+for review labels, VOD split rules, and the next training decision.
+
+Run the canonical desktop app with `python UI/FPSights_Pro_UI/fpsights_pro_ui.py`.
+Use **Choose Model** to select your newly trained `.pt` weights, and **Open Saved Analysis** to load a `run.json` without processing again. Double-click an event to play its source moment. Use Pause / Resume for embedded event playback.
+The processor and command line share defaults in `src/settings.py`; detector input is 960 pixels for the current model.
 
 ## Setup
 
@@ -79,13 +84,15 @@ The output directory will also contain:
 
 - `detections.json` — source frame/timestamp, round, crosshair center, boxes,
   class names, and confidence values.
-- `metrics.json` — crosshair score, aim-acquisition timing, and event markers
-  ready for the desktop UI.
+- `metrics.json` — crosshair proximity estimate, aim-alignment timing, and
+  event markers ready for the desktop UI.
+- The coaching panel and PDF summarize available metrics and optional practice drills.
+  New analyses no longer generate automatic lesson clips.
 - `review.mp4` — compact live-round video with detection boxes for quick QA.
 
 The review video contains only sampled live gameplay and has no audio. The
 original VOD and JSON timestamps remain the authoritative analysis sources.
-Aim-acquisition timing is the interval from first enemy detection until the
+Aim-alignment timing is the interval from first confirmed enemy detection until the
 crosshair reaches the upper part of an enemy box. It is an explainable proxy;
 it must not be presented as shot reaction time until shot detection is added
 and validated against manually timed examples.
@@ -133,8 +140,24 @@ The tests exercise segmentation timelines, range-aware frame reading, YOLO
 result serialization, segmentation-only processing, and the full detection +
 review-video path with a local fake model.
 
-## Launch the UI prototype
+## Launch the desktop app
 
 ```bash
 python UI/FPSights_Pro_UI/fpsights_pro_ui.py
 ```
+
+## Final defence preparation
+
+- [Current project status and MVP gaps](docs/PROJECT_STATUS.md)
+- [Code reading guide](docs/CODE_GUIDE.md)
+- [Detailed final report outline and draft content](docs/FINAL_REPORT_OUTLINE.md)
+- [Free sharing/deployment steps you can follow yourself](docs/FREE_DEPLOYMENT.md)
+
+The original scope remains in `docs/SCOPE.md`; the status audit explains partial
+requirements and unverified targets. The app is native PySide6: a Vercel page can
+showcase it, while actual analysis currently runs on the user's computer.
+
+For a quick defence demonstration, open
+`output/defence-current-20261004/run.json` using **Open Saved Analysis**.
+It contains an explicitly partial saved real-model run, events,
+and a movement heatmap. Reanalyse for the new vertical-placement metric. The output folder is local and ignored by Git.

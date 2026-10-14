@@ -69,3 +69,25 @@ def test_rejects_out_of_order_frames() -> None:
         analyze_detections(
             [_frame(100, (0, 0)), _frame(50, (0, 0))]
         )
+
+
+def test_vertical_offset_preserves_direction_and_avoids_cancellation():
+    result = analyze_detections([
+        _frame(0, (150, 156), enemies=[ENEMY]),
+        _frame(100, (150, 116), enemies=[ENEMY]),
+    ])["summary"]["vertical_placement"]
+    assert result == {"mean_signed_offset_pct": 0.0, "mean_absolute_offset_pct": 10.0,
+                      "evaluated_frames": 2, "below_frames": 1, "above_frames": 1, "level_frames": 0}
+
+
+def test_ambiguous_legacy_targets_cannot_share_alignment_timer():
+    other = dict(ENEMY, x=400)
+    result = analyze_detections([_frame(0, (150, 136), enemies=[ENEMY, other])])
+    assert result["summary"]["aim_reaction"]["measured_encounters"] == 0
+    assert result["summary"]["vertical_placement"]["evaluated_frames"] == 0
+
+
+def test_nonfinite_and_non_enemy_boxes_are_excluded():
+    boxes = [dict(ENEMY, x=float('nan')), dict(ENEMY, h=float('inf')), dict(ENEMY, class_name='ally')]
+    result = analyze_detections([_frame(0, (150, 136), enemies=boxes)])
+    assert result["summary"]["crosshair"]["evaluated_frames"] == 0

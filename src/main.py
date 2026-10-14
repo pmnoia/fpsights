@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .pipeline.processor import ProcessingConfig, process_video
+from .settings import DEFAULT_CONFIDENCE, DEFAULT_FRAME_SKIP, DEFAULT_SAMPLE_RATE
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -29,9 +30,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Optional reviewed segments.json; otherwise segmentation runs first",
     )
-    parser.add_argument("--confidence", type=float, default=0.25)
-    parser.add_argument("--frame-skip", type=int, default=5)
-    parser.add_argument("--sample-rate", type=float, default=2.0)
+    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE)
+    parser.add_argument("--frame-skip", type=int, default=DEFAULT_FRAME_SKIP)
+    parser.add_argument("--sample-rate", type=float, default=DEFAULT_SAMPLE_RATE)
     parser.add_argument("--max-frames", type=int)
     parser.add_argument("--device", help="Ultralytics device: cpu, mps, or 0")
     parser.add_argument(

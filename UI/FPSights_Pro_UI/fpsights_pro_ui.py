@@ -4,9 +4,11 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from sqlite3 import Error as DatabaseError
 
 from PySide6.QtCore import Qt, QObject, QRect, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPixmap
+from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox, QProgressBar,
@@ -22,7 +24,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.history import initialize_history, list_analyses, save_analysis
 from src.pipeline.processor import ProcessingConfig, process_video
-from src.reporting import coaching_recommendations, generate_pdf_report
+from src.reporting import simple_coaching, generate_pdf_report
+from src.settings import DEFAULT_CONFIDENCE, DEFAULT_FRAME_SKIP, DEFAULT_SAMPLE_RATE
 
 BG = "#070d14"
 PANEL = "#0d1722"
@@ -85,7 +88,7 @@ class VideoDropBox(QFrame):
         self.setObjectName("ImportBox")
         self.setProperty("dragActive", False)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(150)
 
     def _set_drag_active(self, active):
         self.setProperty("dragActive", active)
@@ -124,7 +127,7 @@ class HeatmapView(QFrame):
         self.heatmap_pixmap = None
 
     def set_image(self, image_path):
-        pixmap = QPixmap(str(image_path))
+        pixmap = QPixmap(str(image_path)) if image_path else QPixmap()
         self.heatmap_pixmap = pixmap if not pixmap.isNull() else None
         self.update()
 
@@ -173,6 +176,7 @@ class AnalysisWorker(QObject):
     """Run the existing FPSights processor without freezing the UI."""
 
     progress = Signal(int, int)
+    status = Signal(str)
     succeeded = Signal(dict)
     failed = Signal(str)
     finished = Signal()
@@ -184,7 +188,9 @@ class AnalysisWorker(QObject):
     @Slot()
     def run(self):
         try:
-            result = process_video(self.config, progress=lambda done, total: self.progress.emit(done, total))
+            result = process_video(
+                self.config, progress=self.progress.emit, status=self.status.emit
+            )
             self.succeeded.emit(result)
         except Exception as error:
             self.failed.emit(str(error))
@@ -196,9 +202,14 @@ class FPSightsPro(QMainWindow):
     def __init__(self):
         super().__init__()
         self.selected_video = None
+        self.selected_model = self.find_model_path()
         self.analysis_thread = None
         self.analysis_worker = None
         self.last_analysis_result = None
+        self.history_rows = []
+        self.lesson_video_path = None
+        self.lesson_start_ms = 0
+        self.lesson_end_ms = 0
         self.history_path = PROJECT_ROOT / "output" / "fpsights-history.sqlite"
         initialize_history(self.history_path)
         self.setWindowTitle("FPSights — VOD Analysis")
@@ -227,6 +238,7 @@ class FPSightsPro(QMainWindow):
         self.build_brand(page_layout)
         self.build_import_section(page_layout)
         self.build_analysis_dashboard(page_layout)
+        self.build_lesson_section(page_layout)
         self.build_heatmap_section(page_layout)
         self.build_event_section(page_layout)
         self.build_history_section(page_layout)
@@ -235,10 +247,10 @@ class FPSightsPro(QMainWindow):
     def build_brand(self, layout):
         logo = QLabel()
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedHeight(190)
+        logo.setFixedHeight(100)
         pixmap = QPixmap(str(LOGO_PATH))
         if not pixmap.isNull():
-            logo.setPixmap(pixmap.scaled(190, 190, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setPixmap(pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             logo.setText("FPSights")
             logo.setStyleSheet(f"color:{TEXT}; font-size:34px; font-weight:bold;")
@@ -262,6 +274,15 @@ class FPSightsPro(QMainWindow):
         self.choose_vod_button = QPushButton("Choose Video")
         self.choose_vod_button.clicked.connect(self.choose_video)
         box_layout.addWidget(self.choose_vod_button, alignment=Qt.AlignHCenter)
+        model_row = QHBoxLayout()
+        self.model_label = label(
+            f"Model: {self.selected_model.name}" if self.selected_model else "No model selected: segmentation only", 11, MUTED
+        )
+        self.choose_model_button = QPushButton("Choose Model")
+        self.choose_model_button.clicked.connect(self.choose_model)
+        model_row.addWidget(self.model_label, 1)
+        model_row.addWidget(self.choose_model_button)
+        box_layout.addLayout(model_row)
         layout.addWidget(self.import_box)
 
         actions = QHBoxLayout()
@@ -275,6 +296,9 @@ class FPSightsPro(QMainWindow):
         self.open_review_button.clicked.connect(self.open_review_video)
         actions.addWidget(self.start_analysis_button)
         actions.addWidget(self.open_review_button)
+        self.open_saved_button = QPushButton("Open Saved Analysis")
+        self.open_saved_button.clicked.connect(self.choose_saved_analysis)
+        actions.addWidget(self.open_saved_button)
         actions.addStretch()
         layout.addLayout(actions)
 
@@ -296,10 +320,9 @@ class FPSightsPro(QMainWindow):
         heading_copy = QVBoxLayout()
         title = label("Analysis dashboard", 24, TEXT, True)
         title.setWordWrap(False)
-        subtitle = label("Your latest completed video analysis", 13, MUTED)
-        subtitle.setWordWrap(False)
+        self.result_label = label("Analyze a video or open a saved analysis", 13, MUTED)
         heading_copy.addWidget(title)
-        heading_copy.addWidget(subtitle)
+        heading_copy.addWidget(self.result_label)
         heading.addLayout(heading_copy, 1)
         self.export_report_button = QPushButton("Export Report")
         self.export_report_button.setEnabled(False)
@@ -309,32 +332,130 @@ class FPSightsPro(QMainWindow):
 
         stats = QGridLayout()
         stats.setSpacing(12)
-        self.aim_card = StatCard("AIM ACQUISITION", "N/A", "Waiting for analysis", "⚡")
-        self.crosshair_card = StatCard("CROSSHAIR SCORE", "N/A", "Waiting for analysis", "⌖")
-        self.positioning_card = StatCard("POSITIONING", "N/A", "Waiting for analysis", "◎")
+        self.aim_card = StatCard("AIM ALIGNMENT TIME", "N/A", "Measured encounters only", "⚡")
+        self.crosshair_card = StatCard("HEAD OFFSET", "N/A", "Estimated from enemy boxes", "⌖")
+        self.positioning_card = StatCard("MINIMAP MARKER COVERAGE", "N/A", "Tracking coverage only", "◎")
+        self.aim_card.setToolTip("Time from first confirmed enemy detection to estimated head-area alignment. Not shot reaction time.")
+        self.crosshair_card.setToolTip("Distance from screen-center crosshair to an estimated head point inside a detected enemy box. Not shooting accuracy or a grade.")
+        self.positioning_card.setToolTip("Share of sampled gameplay frames where a POV marker was found on the minimap. Not positioning skill.")
         for column, card in enumerate([self.aim_card, self.crosshair_card, self.positioning_card]):
             stats.addWidget(card, 0, column)
             stats.setColumnStretch(column, 1)
         layout.addLayout(stats)
+        layout.addWidget(label(
+            "Crosshair uses screen centre and an estimated head area. Alignment measures reaching that area, not firing a shot. Inspect the video before acting on a suggestion.",
+            11, MUTED,
+        ))
 
-        coaching = QFrame()
-        coaching.setObjectName("CardHot")
-        coaching_layout = QVBoxLayout(coaching)
-        coaching_layout.setContentsMargins(20, 16, 20, 16)
-        coaching_layout.setSpacing(8)
-        coaching_layout.addWidget(label("COACHING REPORT", 12, RED, True))
-        self.coach_feedback_labels = []
-        for placeholder in ["Analyze a VOD to generate coaching feedback.", "", ""]:
-            feedback = label(placeholder, 12, TEXT)
-            self.coach_feedback_labels.append(feedback)
-            coaching_layout.addWidget(feedback)
-        layout.addWidget(coaching)
+
+    def build_lesson_section(self, layout):
+        layout.addWidget(section_title("Coaching report"))
+        lesson_card = QFrame()
+        lesson_card.setObjectName("CardHot")
+        lesson_layout = QVBoxLayout(lesson_card)
+        lesson_layout.setContentsMargins(20, 16, 20, 16)
+        lesson_layout.setSpacing(10)
+        self.lesson_title = label("Analyze a video to see your coaching report.", 18, TEXT, True)
+        self.lesson_summary = label("", 12, MUTED)
+        self.lesson_practice = label("", 12, GREEN)
+        lesson_layout.addWidget(self.lesson_title)
+        lesson_layout.addWidget(self.lesson_summary)
+        lesson_layout.addWidget(self.lesson_practice)
+        self.lesson_examples_layout = QVBoxLayout()
+        lesson_layout.addLayout(self.lesson_examples_layout)
+        self.lesson_player = QMediaPlayer(self)
+        self.lesson_audio = QAudioOutput(self)
+        # Video playback should also work on computers without an audio device.
+        if not QMediaDevices.defaultAudioOutput().isNull():
+            self.lesson_player.setAudioOutput(self.lesson_audio)
+        self.lesson_video = QLabel()
+        self.lesson_video.setAlignment(Qt.AlignCenter)
+        self.lesson_video.setMaximumHeight(500)
+        self.lesson_video.setMinimumHeight(320)
+        self.lesson_video.hide()
+        # Display decoded frames directly; no GPU video widget is required.
+        self.lesson_sink = QVideoSink(self)
+        self.lesson_sink.videoFrameChanged.connect(self.show_video_frame)
+        self.lesson_player.setVideoSink(self.lesson_sink)
+        self.lesson_player.positionChanged.connect(self.stop_lesson_at_end)
+        self.lesson_player.mediaStatusChanged.connect(self.lesson_media_ready)
+        lesson_layout.addWidget(self.lesson_video)
+        self.lesson_playback_label = label("", 11, MUTED)
+        lesson_layout.addWidget(self.lesson_playback_label)
+        self.pause_lesson_button = QPushButton("Pause / Resume")
+        self.pause_lesson_button.setEnabled(False)
+        self.pause_lesson_button.clicked.connect(self.toggle_lesson_playback)
+        lesson_layout.addWidget(self.pause_lesson_button, alignment=Qt.AlignLeft)
+        layout.addWidget(lesson_card)
+
+    def show_lesson(self, result):
+        self.lesson_player.stop()
+        self.lesson_end_ms = 0
+        self.pause_lesson_button.setEnabled(False)
+        self.lesson_video.hide()
+        self.lesson_playback_label.setText("")
+        while self.lesson_examples_layout.count():
+            item = self.lesson_examples_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        video_path = Path(str((result.get("video") or {}).get("path", "")))
+        self.lesson_video_path = video_path if video_path.is_file() else None
+        self.lesson_title.setText("Crosshair placement and gunfight practice")
+        self.lesson_summary.setText("\n\n".join(simple_coaching(result)))
+        self.lesson_practice.setText("")
+
+    def play_lesson(self, example):
+        clip_path = Path(str(example.get("clip_path", "")))
+        use_clip = clip_path.is_file()
+        if not use_clip and self.lesson_video_path is None:
+            return
+        self.lesson_player.stop()
+        self.lesson_start_ms = 0 if use_clip else int(example["start_ms"])
+        self.lesson_end_ms = (
+            int(example["end_ms"]) - int(example["start_ms"])
+            if use_clip else int(example["end_ms"])
+        )
+        self.lesson_video.show()
+        self.pause_lesson_button.setEnabled(True)
+        self.lesson_playback_label.setText("Playing footage from the original VOD.")
+        source = QUrl.fromLocalFile(str(clip_path if use_clip else self.lesson_video_path))
+        if self.lesson_player.source() != source:
+            self.lesson_player.setSource(source)
+        else:
+            self.lesson_player.setPosition(self.lesson_start_ms)
+            self.lesson_player.play()
+
+    def show_video_frame(self, frame):
+        if frame.isValid():
+            pixmap = QPixmap.fromImage(frame.toImage())
+            self.lesson_video.setPixmap(pixmap.scaled(self.lesson_video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def toggle_lesson_playback(self):
+        if self.lesson_player.playbackState() == QMediaPlayer.PlayingState:
+            self.lesson_player.pause()
+        else:
+            if self.lesson_player.position() >= self.lesson_end_ms:
+                self.lesson_player.setPosition(self.lesson_start_ms)
+            self.lesson_player.play()
+
+    def lesson_media_ready(self, status):
+        if status == QMediaPlayer.LoadedMedia and self.lesson_video.isVisible():
+            self.lesson_player.setPosition(self.lesson_start_ms)
+            self.lesson_player.play()
+        elif status == QMediaPlayer.InvalidMedia:
+            self.lesson_playback_label.setText("This video could not be played. Check the original file and codec.")
+
+    def stop_lesson_at_end(self, position):
+        if self.lesson_end_ms and position >= self.lesson_end_ms:
+            self.lesson_player.pause()
 
     def build_heatmap_section(self, layout):
-        layout.addWidget(section_title("Position heatmap"))
+        layout.addWidget(section_title("POV minimap activity"))
         self.analysis_heatmap = HeatmapView()
         layout.addWidget(self.analysis_heatmap)
-        layout.addWidget(label("Hot colors show where the tracked player marker appeared most often on the in-game minimap. Coverage depends on successful marker detection.", 12, MUTED))
+        layout.addWidget(label("Warmer areas contain more marker observations. Approximate minimap coordinates; rotating maps can distort this view.", 11, MUTED))
+        layout.addWidget(label("Hot colors show detected POV-marker locations, including possible spectated teammates. Alive state and player identity are not verified. A fixed minimap is needed to interpret these as map locations.", 12, MUTED))
 
     def build_event_section(self, layout):
         layout.addWidget(section_title("Detected events"))
@@ -342,7 +463,9 @@ class FPSightsPro(QMainWindow):
         self.analysis_event_table.setHorizontalHeaderLabels(["#", "TIME", "EVENT", "ROUND", "DETAILS"])
         self.analysis_event_table.setMinimumHeight(230)
         self.configure_table(self.analysis_event_table, 4)
+        self.analysis_event_table.cellDoubleClicked.connect(self.play_event)
         layout.addWidget(self.analysis_event_table)
+        layout.addWidget(label("Double-click an event to inspect that moment in the original video.", 11, MUTED))
 
     def build_history_section(self, layout):
         history_header = QHBoxLayout()
@@ -351,10 +474,12 @@ class FPSightsPro(QMainWindow):
         history_header.addWidget(label("Saved locally", 11, MUTED))
         layout.addLayout(history_header)
         self.match_history_table = QTableWidget(0, 7)
-        self.match_history_table.setHorizontalHeaderLabels(["DATE", "VIDEO", "CROSSHAIR", "AIM", "MINIMAP", "DETECTIONS", "ROUNDS"])
+        self.match_history_table.setHorizontalHeaderLabels(["DATE", "VIDEO", "PROXIMITY", "ALIGNMENT", "MARKER COVERAGE", "DETECTIONS", "ROUNDS"])
         self.match_history_table.setMinimumHeight(250)
         self.configure_table(self.match_history_table, 1)
+        self.match_history_table.cellDoubleClicked.connect(self.load_saved_analysis)
         layout.addWidget(self.match_history_table)
+        layout.addWidget(label("Double-click a saved analysis to reopen its report.", 11, MUTED))
 
     def configure_table(self, table, stretch_column):
         table.setAlternatingRowColors(True)
@@ -374,6 +499,8 @@ class FPSightsPro(QMainWindow):
 
     @Slot(str)
     def set_selected_video(self, file_path):
+        if self.analysis_thread is not None:
+            return
         self.selected_video = Path(file_path)
         self.selected_video_label.setText(self.selected_video.name)
         self.selected_video_label.setStyleSheet(f"color:{TEXT}; font-size:13px; font-weight:bold;")
@@ -387,6 +514,17 @@ class FPSightsPro(QMainWindow):
         model = PROJECT_ROOT / "models" / "fpsights-yolo11n-960.pt"
         return model if model.exists() else None
 
+    def choose_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose trained enemy model", str(PROJECT_ROOT / "models"), "YOLO Weights (*.pt)")
+        if path:
+            self.selected_model = Path(path)
+            self.model_label.setText(f"Model: {self.selected_model.name}")
+
+    def choose_saved_analysis(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open a saved analysis", str(PROJECT_ROOT / "output"), "Analysis (run.json)")
+        if path:
+            self.open_saved_analysis(Path(path))
+
     def start_analysis(self):
         if self.selected_video is None:
             QMessageBox.warning(self, "No VOD Selected", "Please choose a gameplay video first.")
@@ -398,16 +536,22 @@ class FPSightsPro(QMainWindow):
             QMessageBox.information(self, "Analysis Running", "FPSights is already analyzing a video.")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         output_dir = PROJECT_ROOT / "output" / self.selected_video.stem / timestamp
-        model_path = self.find_model_path()
+        model_path = self.selected_model
         config = ProcessingConfig(
             video_path=self.selected_video, output_dir=output_dir, model_path=model_path,
-            confidence=0.25, frame_skip=5, sample_rate=2.0,
+            confidence=DEFAULT_CONFIDENCE,
+            frame_skip=DEFAULT_FRAME_SKIP,
+            sample_rate=DEFAULT_SAMPLE_RATE,
             device="cpu" if model_path is not None else None,
             preview=False, review_video=model_path is not None,
         )
         self.choose_vod_button.setEnabled(False)
+        self.choose_model_button.setEnabled(False)
+        self.open_saved_button.setEnabled(False)
+        self.export_report_button.setEnabled(False)
+        self.lesson_player.stop()
         self.start_analysis_button.setEnabled(False)
         self.open_review_button.setEnabled(False)
         self.analysis_progress.setRange(0, 0)
@@ -421,6 +565,7 @@ class FPSightsPro(QMainWindow):
         self.analysis_worker.moveToThread(self.analysis_thread)
         self.analysis_thread.started.connect(self.analysis_worker.run)
         self.analysis_worker.progress.connect(self.update_analysis_progress)
+        self.analysis_worker.status.connect(self.analysis_status_label.setText)
         self.analysis_worker.succeeded.connect(self.analysis_succeeded)
         self.analysis_worker.failed.connect(self.analysis_failed)
         self.analysis_worker.finished.connect(self.analysis_thread.quit)
@@ -438,7 +583,22 @@ class FPSightsPro(QMainWindow):
 
     @Slot(dict)
     def analysis_succeeded(self, result):
+        """Save a new run, then use the same display flow as history playback."""
+        self.display_analysis(result)
+        try:
+            save_analysis(self.history_path, result)
+            self.refresh_match_history()
+        except (OSError, ValueError, DatabaseError) as error:
+            # Keep the analysis visible even if local history cannot be written.
+            self.analysis_status_label.setText(f"Analysis ready; history could not be saved: {error}")
+
+    def display_analysis(self, result):
         self.last_analysis_result = result
+        video = result.get("video") or {}
+        duration = video.get("duration_ms", 0) / 60000
+        frames = (result.get("detection") or {}).get("processed_frames", 0)
+        live_seconds = (result.get("segmentation") or {}).get("analyzable_duration_ms", 0) / 1000
+        self.result_label.setText(f"{Path(video.get('path', 'Unknown video')).name} · {duration:.1f} min source · {live_seconds:.1f}s live ranges · {frames:,} sampled frames")
         self.analysis_progress.setRange(0, 100)
         self.analysis_progress.setValue(100)
         analytics = result.get("analytics") or {}
@@ -449,41 +609,47 @@ class FPSightsPro(QMainWindow):
         score = crosshair.get("score_percent")
         head_error = crosshair.get("mean_head_error_px")
         evaluated_frames = crosshair.get("evaluated_frames", 0)
-        if isinstance(score, (int, float)):
-            error_text = f"{head_error:.1f}px" if isinstance(head_error, (int, float)) else "N/A"
-            self.crosshair_card.set_value(f"{score:.1f}%", f"{evaluated_frames} frames • head error {error_text}")
+        if isinstance(head_error, (int, float)):
+            self.crosshair_card.set_value(f"{head_error:.1f}px", f"Estimated head offset · {evaluated_frames} frames")
         else:
-            self.crosshair_card.set_value("N/A", "No YOLO crosshair result")
+            self.crosshair_card.set_value("N/A", "No confirmed enemy frames to measure")
 
         aim_ms = aim.get("average_ms")
         measured = aim.get("measured_encounters", 0)
         encounters = aim.get("encounters", 0)
         if isinstance(aim_ms, (int, float)):
-            self.aim_card.set_value(f"{aim_ms:.0f} ms", f"{measured}/{encounters} encounters measured")
+            self.aim_card.set_value(f"{aim_ms:.0f} ms", f"Measured subset: {measured}/{encounters} encounters")
         else:
-            self.aim_card.set_value("N/A", f"{measured}/{encounters} encounters measured")
+            self.aim_card.set_value("N/A", f"Measured subset: {measured}/{encounters} encounters")
 
         samples = positioning.get("sample_count", 0)
         coverage = positioning.get("coverage_percent")
         if isinstance(coverage, (int, float)) and samples:
-            self.positioning_card.set_value(f"{coverage:.1f}%", f"{samples} minimap samples")
+            self.positioning_card.set_value(f"{coverage:.1f}%", f"Marker found in {samples} sampled frames")
         else:
             self.positioning_card.set_value("N/A", "Player marker not detected")
 
         self.load_real_events(result)
-        self.update_coaching_feedback(result)
-        save_analysis(self.history_path, result)
-        self.refresh_match_history()
+        self.show_lesson(result)
         heatmap_path = result.get("artifacts", {}).get("heatmap")
-        if heatmap_path and Path(heatmap_path).exists():
-            self.analysis_heatmap.set_image(heatmap_path)
+        # Always reset the image so an empty run cannot show a previous heatmap.
+        self.analysis_heatmap.set_image(heatmap_path)
         review_path = result.get("artifacts", {}).get("review_video")
         self.open_review_button.setEnabled(bool(review_path and Path(review_path).exists()))
         self.export_report_button.setEnabled(True)
-        self.analysis_status_label.setText("Analysis complete." if analytics else "Segmentation complete. YOLO analytics were not generated.")
+        if result.get("status") == "stopped" or result.get("limited_run"):
+            message = "Partial analysis: only the processed frames are included."
+        elif not analytics:
+            message = "Segmentation complete. Add trained weights to generate enemy analytics."
+        elif not result.get("segmentation", {}).get("analyzable_duration_ms"):
+            message = "No live gameplay found. Try a clear Valorant recording."
+        else:
+            message = "Analysis ready. Review the moments below, or export your report."
+        self.analysis_status_label.setText(message)
 
     def load_real_events(self, result):
         self.analysis_event_table.setRowCount(0)
+        self.current_events = []
         metrics_path = result.get("artifacts", {}).get("metrics")
         if not metrics_path or not Path(metrics_path).exists():
             return
@@ -494,6 +660,7 @@ class FPSightsPro(QMainWindow):
         events = metrics.get("events", [])
         if not isinstance(events, list):
             return
+        self.current_events = events
         self.analysis_event_table.setRowCount(len(events))
         for row, event in enumerate(events):
             timestamp_ms = event.get("timestamp_ms", 0)
@@ -513,15 +680,11 @@ class FPSightsPro(QMainWindow):
             for column, value in enumerate(values):
                 self.analysis_event_table.setItem(row, column, QTableWidgetItem(value))
 
-    def update_coaching_feedback(self, result):
-        analytics = result.get("analytics") or {}
-        recommendations = coaching_recommendations(analytics.get("crosshair") or {}, analytics.get("aim_reaction") or {})
-        for index, feedback in enumerate(self.coach_feedback_labels):
-            if index < len(recommendations):
-                feedback.setText(recommendations[index])
-                feedback.show()
-            else:
-                feedback.hide()
+    def play_event(self, row, _column):
+        if not 0 <= row < len(self.current_events) or self.lesson_video_path is None:
+            return
+        timestamp = int(self.current_events[row]["timestamp_ms"])
+        self.play_lesson({"start_ms": max(0, timestamp - 2000), "end_ms": timestamp + 4000})
 
     def open_review_video(self):
         if not self.last_analysis_result:
@@ -555,6 +718,7 @@ class FPSightsPro(QMainWindow):
 
     def refresh_match_history(self):
         rows = list_analyses(self.history_path, limit=10)
+        self.history_rows = rows
         self.match_history_table.setRowCount(len(rows))
         for row_index, match in enumerate(rows):
             values = [
@@ -568,6 +732,50 @@ class FPSightsPro(QMainWindow):
             for column, value in enumerate(values):
                 self.match_history_table.setItem(row_index, column, QTableWidgetItem(value))
 
+    def load_saved_analysis(self, row, _column):
+        if 0 <= row < len(self.history_rows):
+            self.open_saved_analysis(Path(self.history_rows[row]["run_path"]) / "run.json")
+
+    def open_saved_analysis(self, run_path):
+        """Read saved results without recomputing or changing the source run."""
+        if self.analysis_thread is not None:
+            return
+        try:
+            result = json.loads(run_path.read_text(encoding="utf-8"))
+            if not isinstance(result, dict) or result.get("schema_version") != 1 or not isinstance(result.get("video"), dict):
+                raise ValueError("Choose a valid FPSights run.json file.")
+            # Prefer artifacts beside run.json when an analysis folder was moved.
+            artifacts = result.setdefault("artifacts", {})
+            if not isinstance(artifacts, dict):
+                raise ValueError("The saved artifact list is invalid.")
+            for key, filename in {
+                "segments": "segments.json", "metrics": "metrics.json",
+                "detections": "detections.json", "heatmap": "heatmap.png",
+                "positioning": "positioning.json", "review_video": "review.mp4",
+                "lessons": "lessons.json",
+            }.items():
+                local_path = run_path.parent / filename
+                if local_path.is_file():
+                    artifacts[key] = str(local_path.resolve())
+            if artifacts.get("lessons") and Path(artifacts["lessons"]).is_file():
+                result["lessons"] = json.loads(Path(artifacts["lessons"]).read_text(encoding="utf-8"))
+            for index, example in enumerate((result.get("lessons") or {}).get("examples", []), 1):
+                clip = run_path.parent / f"lesson-{index:02d}.mp4"
+                if clip.is_file():
+                    example["clip_path"] = str(clip.resolve())
+            self.display_analysis(result)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+            QMessageBox.warning(self, "Could Not Open Analysis", str(error))
+
+    def closeEvent(self, event):
+        # Qt must keep the worker thread alive until processing has finished.
+        if self.analysis_thread is not None:
+            QMessageBox.information(self, "Analysis Running", "Wait for analysis to finish before closing FPSights.")
+            event.ignore()
+            return
+        self.lesson_player.stop()
+        super().closeEvent(event)
+
     @Slot(str)
     def analysis_failed(self, error):
         self.analysis_progress.setRange(0, 100)
@@ -578,6 +786,9 @@ class FPSightsPro(QMainWindow):
     @Slot()
     def analysis_finished(self):
         self.choose_vod_button.setEnabled(True)
+        self.choose_model_button.setEnabled(True)
+        self.open_saved_button.setEnabled(True)
+        self.export_report_button.setEnabled(self.last_analysis_result is not None)
         self.start_analysis_button.setEnabled(self.selected_video is not None)
         self.analysis_worker = None
         self.analysis_thread = None

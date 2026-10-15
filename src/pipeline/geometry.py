@@ -10,7 +10,6 @@ def estimated_head(box: dict[str, Any]) -> tuple[float, float]:
 
 
 def head_distance(x: float, y: float, box: dict[str, Any]) -> float:
-    """Return the pixel distance from a point to the box's estimated head."""
     head_x, head_y = estimated_head(box)
     return hypot(x - head_x, y - head_y)
 

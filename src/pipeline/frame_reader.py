@@ -14,11 +14,6 @@ def read_frames(
     start_ms: int = 0,
     end_ms: int | None = None,
 ) -> Iterator[tuple[int, Any]]:
-    """Yield numbered video frames from one time range, skipping frames as asked.
-
-    Frame numbers stay tied to the original video. The capture is closed when
-    reading ends or the caller stops early.
-    """
     if frame_skip < 1:
         raise ValueError("frame_skip must be at least 1")
 

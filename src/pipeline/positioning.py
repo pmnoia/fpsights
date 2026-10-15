@@ -13,14 +13,12 @@ class MinimapTracker:
     """Track white POV markers; color alone does not establish player identity."""
 
     def __init__(self) -> None:
-        """Start with no known marker position or minimap background."""
         self.previous: tuple[float, float] | None = None
         self.segment_id: str | None = None
         self.background: np.ndarray | None = None
         self.misses = 0
 
     def observe(self, frame: np.ndarray, segment_id: str) -> dict[str, float] | None:
-        """Find one plausible white POV marker and return crop coordinates."""
         if segment_id != self.segment_id:
             self.segment_id = segment_id
             self.previous = None
@@ -63,7 +61,6 @@ class MinimapTracker:
         return {"x": round(x / width, 6), "y": round(y / height, 6)}
 
     def _miss(self) -> None:
-        """Forget an old marker position after three missed observations."""
         # Reacquire after a gap or POV jump instead of staying locked forever.
         # This is continuity handling, not evidence of death or identity.
         self.misses += 1
@@ -71,7 +68,6 @@ class MinimapTracker:
             self.previous = None
 
     def render(self, points: list[dict[str, Any]], output_path: Path) -> bool:
-        """Draw a visit-density image and report whether it was saved."""
         if self.background is None or not points:
             return False
 
@@ -115,13 +111,11 @@ class MinimapTracker:
 
 
 def _minimap_roi(frame: np.ndarray) -> np.ndarray:
-    """Crop the top-left screen area where the minimap usually appears."""
     height, width = frame.shape[:2]
     return frame[: max(1, round(height * 0.37)), : max(1, round(width * 0.225))]
 
 
 def _white_candidates(roi: np.ndarray) -> list[tuple[int, float, float]]:
-    """Find small white shapes that could be the viewed POV marker."""
     hsv = cv.cvtColor(roi, cv.COLOR_BGR2HSV)
     mask = cv.inRange(hsv, (0, 0, 210), (179, 45, 255))
     _, _, stats, centroids = cv.connectedComponentsWithStats(mask)

@@ -333,10 +333,10 @@ class FPSightsPro(QMainWindow):
         stats = QGridLayout()
         stats.setSpacing(12)
         self.aim_card = StatCard("AIM ALIGNMENT TIME", "N/A", "Measured encounters only", "⚡")
-        self.crosshair_card = StatCard("HEAD OFFSET", "N/A", "Estimated from enemy boxes", "⌖")
+        self.crosshair_card = StatCard("CROSSHAIR PROXIMITY", "N/A", "Estimated from enemy boxes", "⌖")
         self.positioning_card = StatCard("MINIMAP MARKER COVERAGE", "N/A", "Tracking coverage only", "◎")
         self.aim_card.setToolTip("Time from first confirmed enemy detection to estimated head-area alignment. Not shot reaction time.")
-        self.crosshair_card.setToolTip("Distance from screen-center crosshair to an estimated head point inside a detected enemy box. Not shooting accuracy or a grade.")
+        self.crosshair_card.setToolTip("Proximity estimate from the screen-center crosshair to an estimated head point inside a detected enemy box. Not shooting accuracy or a grade.")
         self.positioning_card.setToolTip("Share of sampled gameplay frames where a POV marker was found on the minimap. Not positioning skill.")
         for column, card in enumerate([self.aim_card, self.crosshair_card, self.positioning_card]):
             stats.addWidget(card, 0, column)
@@ -607,10 +607,9 @@ class FPSightsPro(QMainWindow):
         positioning = analytics.get("positioning") or {}
 
         score = crosshair.get("score_percent")
-        head_error = crosshair.get("mean_head_error_px")
         evaluated_frames = crosshair.get("evaluated_frames", 0)
-        if isinstance(head_error, (int, float)):
-            self.crosshair_card.set_value(f"{head_error:.1f}px", f"Estimated head offset · {evaluated_frames} frames")
+        if isinstance(score, (int, float)):
+            self.crosshair_card.set_value(f"{score:.1f}%", f"Estimated proximity · {evaluated_frames} frames")
         else:
             self.crosshair_card.set_value("N/A", "No confirmed enemy frames to measure")
 

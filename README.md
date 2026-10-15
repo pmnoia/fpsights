@@ -1,7 +1,5 @@
 # FPSights
 
-New to the code? Start with the [one-hour Python and architecture guide](docs/ONE_HOUR_CODE_GUIDE.md).
-
 Current coaching workflow: [simple coaching and metric definitions](docs/SIMPLE_COACHING.md). The app now shows a shared coaching report instead of automatically selected lesson clips.
 
 FPSights processes recorded Valorant matches in two stages:

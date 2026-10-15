@@ -17,7 +17,6 @@ class YoloDetector:
         confidence: float = 0.25,
         device: str | None = None,
     ) -> None:
-        """Load model weights and store the confidence and device settings."""
         model_file = Path(model_path)
 
         if not model_file.is_file():
@@ -38,7 +37,6 @@ class YoloDetector:
         self.device = device
 
     def detect(self, frame: Any) -> dict[str, Any]:
-        """Find enemy boxes in one image and use its center as the crosshair."""
         if frame is None:
             raise ValueError("detect() received an empty frame")
 
@@ -83,7 +81,6 @@ class YoloDetector:
 
 
 def _class_name(names: Any, class_id: int) -> str:
-    """Turn YOLO's numeric class ID into a readable class name."""
     if isinstance(names, dict):
         return str(names.get(class_id, class_id))
 

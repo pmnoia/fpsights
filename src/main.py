@@ -11,7 +11,6 @@ from .settings import DEFAULT_CONFIDENCE, DEFAULT_FRAME_SKIP, DEFAULT_SAMPLE_RAT
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Read command-line options and return them as one ``args`` object."""
     parser = argparse.ArgumentParser(
         description="Segment a Valorant VOD and optionally run YOLO detection."
     )
@@ -50,7 +49,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Build the run settings, process the video, and print a short result."""
     args = parse_args(argv)
     output_dir = args.output_dir or Path("output") / args.input.stem
     config = ProcessingConfig(
@@ -89,7 +87,6 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def _print_progress(done: int, total: int) -> None:
-    """Print progress at the start, every 250 frames, and at the end."""
     if done == 1 or done == total or done % 250 == 0:
         print(f"Processed {done}/{total} YOLO frames")
 

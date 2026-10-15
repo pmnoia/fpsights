@@ -37,13 +37,11 @@ def analyze_detections(
             raise ValueError("detection frames must be sorted by timestamp_ms")
         previous_timestamp = timestamp_ms
         segment_id = frame.get("segment_id")
-        current_encounters = {}
-        for track_id, encounter in active.items():
-            same_round = encounter["segment_id"] == segment_id
-            recently_seen = timestamp_ms - encounter["last_visible_ms"] <= max_gap_ms
-            if same_round and recently_seen:
-                current_encounters[track_id] = encounter
-        active = current_encounters
+        active = {
+            track_id: encounter for track_id, encounter in active.items()
+            if encounter["segment_id"] == segment_id
+            and timestamp_ms - encounter["last_visible_ms"] <= max_gap_ms
+        }
         enemies = [
             enemy for enemy in frame.get("enemy_positions", [])
             if _valid_box(enemy) and enemy.get("confirmed") is not False
@@ -52,10 +50,7 @@ def analyze_detections(
             continue
         crosshair_x = _integer(frame, "crosshair_x")
         crosshair_y = _integer(frame, "crosshair_y")
-        target = min(
-            enemies,
-            key=lambda enemy: head_distance(crosshair_x, crosshair_y, enemy),
-        )
+        target = min(enemies, key=lambda enemy: head_distance(crosshair_x, crosshair_y, enemy))
         error = head_distance(crosshair_x, crosshair_y, target)
         errors.append(error)
         scores.append(_placement_score(error, target))
@@ -121,7 +116,6 @@ def analyze_detections(
 
 
 def _integer(payload: dict[str, Any], key: str) -> int:
-    """Read a required integer field from one saved detection frame."""
     value = payload.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"detection frame is missing integer {key}")
@@ -129,20 +123,20 @@ def _integer(payload: dict[str, Any], key: str) -> int:
 
 
 def _valid_box(box: Any) -> bool:
-    """Check that a detection is a usable enemy rectangle."""
-    if not isinstance(box, dict) or box.get("class_name", "enemy") != "enemy":
-        return False
-    for key in ("x", "y", "w", "h"):
-        value = box.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False
-        if not isfinite(value):
-            return False
-    return box["w"] > 0 and box["h"] > 0
+    return (
+        isinstance(box, dict)
+        and isinstance(box.get("x"), (int, float))
+        and isinstance(box.get("y"), (int, float))
+        and isinstance(box.get("w"), (int, float))
+        and isinstance(box.get("h"), (int, float))
+        and all(not isinstance(box[key], bool) and isfinite(box[key]) for key in ("x", "y", "w", "h"))
+        and box.get("class_name", "enemy") == "enemy"
+        and box["w"] > 0
+        and box["h"] > 0
+    )
 
 
 def _placement_score(error: float, box: dict[str, Any]) -> float:
-    """Convert head distance into a 0 to 100 proximity estimate."""
     tolerance = max(1.0, box["h"] * 0.5)
     return max(0.0, 100.0 * (1.0 - error / tolerance))
 
@@ -152,7 +146,6 @@ def _crosshair_on_head(
     crosshair_y: int,
     box: dict[str, Any],
 ) -> bool:
-    """Check whether the crosshair is inside the upper 35% of a box."""
     return (
         box["x"] <= crosshair_x <= box["x"] + box["w"]
         and box["y"] <= crosshair_y <= box["y"] + box["h"] * 0.35
@@ -164,7 +157,6 @@ def _event(
     frame: dict[str, Any],
     **details: Any,
 ) -> dict[str, Any]:
-    """Create one timestamped event for the UI and saved metrics."""
     return {
         "type": event_type,
         "timestamp_ms": frame["timestamp_ms"],
@@ -175,5 +167,4 @@ def _event(
 
 
 def _average(values: list[float] | list[int]) -> float | None:
-    """Return a rounded mean, or ``None`` when there is no data."""
     return round(mean(values), 1) if values else None
